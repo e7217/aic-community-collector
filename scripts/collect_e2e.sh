@@ -159,24 +159,23 @@ pt = (cfg.get('policy') or {}).get('per_trial')
 print(json.dumps(pt) if pt else '')
 " 2>/dev/null)
 
-POLICY_MAP=(cheatcode:CollectCheatCode hybrid:RunACTHybrid act:RunACTv1)
-_resolve_policy_class() {
+_resolve_inner_class() {
     local name="$1"
     case "$name" in
-        cheatcode) echo "aic_example_policies.ros.CollectCheatCode" ;;
+        cheatcode) echo "aic_example_policies.ros.CheatCodeInner" ;;
         hybrid)    echo "aic_example_policies.ros.RunACTHybrid" ;;
         act)       echo "aic_example_policies.ros.RunACTv1" ;;
         *)         echo "aic_example_policies.ros.$name" ;;
     esac
 }
 
-POLICY_CLASS=""
+# 모든 경우 CollectDispatchWrapper 사용
+POLICY_CLASS="aic_example_policies.ros.CollectDispatchWrapper"
+export AIC_INNER_POLICY="$(_resolve_inner_class "$POLICY_DEFAULT")"
+[ -n "$ACT_MODEL_PATH" ] && export ACT_MODEL_PATH
+
+# per_trial 환경변수 세팅 (trial별 다른 policy 지정 시)
 if [ -n "$PER_TRIAL_JSON" ] && [ "$PER_TRIAL_JSON" != "null" ]; then
-    # F2-b: trial별 다른 policy → DispatchWrapper 사용
-    POLICY_CLASS="aic_example_policies.ros.CollectDispatchWrapper"
-    # 폴백 inner policy 세팅
-    export AIC_INNER_POLICY="$(_resolve_policy_class "$POLICY_DEFAULT")"
-    # per_trial 환경변수 세팅 (AIC_INNER_POLICY_TRIAL_1, _2, _3)
     eval "$(python3 -c "
 import json, os
 pt = json.loads('$PER_TRIAL_JSON')
@@ -189,39 +188,14 @@ for trial_num, policy_name in pt.items():
     cls = resolve.get(str(policy_name), f'aic_example_policies.ros.{policy_name}')
     print(f'export AIC_INNER_POLICY_TRIAL_{trial_num}=\"{cls}\"')
 ")"
-    [ -n "$ACT_MODEL_PATH" ] && export ACT_MODEL_PATH
-    echo "[policy] F2-b DispatchWrapper (per_trial 활성)"
-    echo "  fallback: $AIC_INNER_POLICY"
-    for i in 1 2 3; do
-        var="AIC_INNER_POLICY_TRIAL_$i"
-        [ -n "${!var}" ] && echo "  trial_$i: ${!var}"
-    done
-else
-    # F2-a: 단일 policy
-    case "$POLICY_DEFAULT" in
-        cheatcode)
-            POLICY_CLASS="aic_example_policies.ros.CollectCheatCode"
-            ;;
-        hybrid)
-            POLICY_CLASS="aic_example_policies.ros.CollectWrapper"
-            export AIC_INNER_POLICY="aic_example_policies.ros.RunACTHybrid"
-            [ -n "$ACT_MODEL_PATH" ] && export ACT_MODEL_PATH
-            ;;
-        act)
-            POLICY_CLASS="aic_example_policies.ros.CollectWrapper"
-            export AIC_INNER_POLICY="aic_example_policies.ros.RunACTv1"
-            [ -n "$ACT_MODEL_PATH" ] && export ACT_MODEL_PATH
-            ;;
-        wrapper)
-            POLICY_CLASS="aic_example_policies.ros.CollectWrapper"
-            ;;
-        *)
-            echo "[error] 알 수 없는 policy: $POLICY_DEFAULT"
-            exit 1
-            ;;
-    esac
-    echo "[policy] class: $POLICY_CLASS"
 fi
+
+echo "[policy] class: $POLICY_CLASS"
+echo "  fallback inner: $AIC_INNER_POLICY"
+for i in 1 2 3; do
+    var="AIC_INNER_POLICY_TRIAL_$i"
+    [ -n "${!var}" ] && echo "  trial_$i: ${!var}"
+done
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_ROOT"

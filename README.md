@@ -1,21 +1,27 @@
 # AIC Community Data Collector
 
-AI for Industry Challenge 커뮨니티 구성원이 **자신의 Policy로 평가 데이터를 수집**하는 도구.
+AI for Industry Challenge 커뮤니티 구성원이 **자신의 Policy로 평가 데이터를 수집**하는 도구.
 
-## 바로 시작하기
+## Quick Start
 
 ```bash
 # 1. 저장소 clone
 git clone https://github.com/e7217/aic-community-collector
 cd aic-community-collector
 
-# 2. policies/ 에 내 policy 파일 넣기
+# 2. (선택) policies/ 에 내 policy 파일 넣기
 
 # 3. Web UI 실행
 uv run src/aic_collector/webapp.py
 ```
 
-브라우저에서 `http://localhost:8501` 접속.
+브라우저에서 `http://localhost:8501` 접속 후, **환경 점검** 탭에서 모든 항목이 통과하는지 확인하세요.
+
+![환경 점검](docs/images/tab_check.png)
+
+모든 항목이 통과하면 **수집** 탭에서 Policy, 반복 횟수, 샘플링 전략을 설정하고 수집을 시작합니다.
+
+![수집 설정](docs/images/tab_collect2.png)
 
 ## 전제 조건
 
@@ -27,39 +33,38 @@ uv run src/aic_collector/webapp.py
 - pixi + `~/ws_aic/src/aic`
 - [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
-## 기능
+## 샘플링 전략
 
-| 기능 | 설명 |
-|------|------|
-| **Web UI** | 브라우저에서 설정 → 수집 → 결과 확인 |
-| **Policy 선택** | 기본 제공(CheatCode/ACT/Hybrid) + 커스텀 policy |
-| **Trial별 설정** | 각 trial에 다른 policy + 파라미터 범위 지정 |
-| **파라미터 분포** | LHS / Uniform / Sobol 샘플링, seed 기반 재현 |
-| **조기 종료** | 삽입 완료 시 자동으로 다음 trial로 (시간 -54%, 스코어 +6%) |
-| **백그라운드 수집** | 탭을 옮겨도 수집 계속 진행 |
-| **Config 관리** | 설정 저장/불러오기/삭제 |
-| **환경 점검** | 필요한 도구 자동 체크 + 설치 |
+수집 시 씬 파라미터(케이블 위치, 각도 등)를 랜덤화하는 방법을 선택할 수 있습니다.
+
+| 전략 | 설명 | 권장 상황 |
+|------|------|-----------|
+| **LHS** (Latin Hypercube) | 각 차원을 N등분하여 구간마다 한 점씩 샘플링. 적은 횟수로도 파라미터 공간을 고르게 커버 | 기본 권장. 대부분의 수집에 적합 |
+| **Uniform** | 각 차원에서 독립적으로 균등 난수 추출 | 단순 랜덤이 필요할 때 |
+| **Sobol** | 저불일치(quasi-random) 수열. 고차원에서 균등 분포 유지 | `runs`를 2의 거듭제곱(8, 16, 32...)으로 설정할 때 효과적 |
+
+모든 전략은 seed 기반이라 동일한 설정으로 재현 가능합니다.
 
 ## CLI 사용
 
-Web UI 없이 CLI로도 수집 가능:
+Web UI 없이 CLI로도 수집 가능합니다.
 
 ```bash
-# dry-run (설정 확인만)
+# dry-run (설정 확인만, 실제 수집 안 함)
 ./scripts/collect_e2e.sh --config configs/e2e_default.yaml --dry-run
 
-# 수집 실행
+# 수집 실행 (3회 반복)
 ./scripts/collect_e2e.sh --config configs/e2e_default.yaml --runs 3
 
-# trial 2만 수집
-./scripts/collect_e2e.sh --config configs/e2e_trial2_only.yaml --runs 5
+# 빠른 테스트 (1회, trial 1개)
+./scripts/collect_e2e.sh --config configs/e2e_test.yaml
 ```
 
 ## 내 Policy 사용하기
 
 1. `policies/` 디렉토리에 Python 파일 추가
 2. `aic_model.policy.Policy`를 상속하고 `insert_cable()` 구현
-3. Web UI에서 자동으로 드롭다운에 표시됨
+3. Web UI 드롭다운에 자동 표시
 
 ## 결과 구조
 
@@ -71,7 +76,7 @@ Web UI 없이 CLI로도 수집 가능:
     │   ├── bag/          # rosbag
     │   ├── episode/      # PNG + npy
     │   ├── scoring.yaml
-    │   └── tags.json     # 구조화 메타데이터
+    │   └── tags.json
     ├── trial_2_score95/
     └── trial_3_score25/
 ```

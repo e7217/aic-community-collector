@@ -24,6 +24,13 @@ export DBX_CONTAINER_MANAGER=docker
 export PATH="$HOME/.pixi/bin:$PATH"
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# distrobox 초기화 보장 (첫 실행 시 유저 생성 등 ~30초 소요)
+if ! docker exec aic_eval id "$(whoami)" &>/dev/null; then
+    echo "[init] distrobox 최초 초기화 중..."
+    distrobox enter aic_eval -- true
+    echo "[init] 초기화 완료"
+fi
 READY_FLAG="$HOME/aic_ready"
 DONE_FLAG="$HOME/aic_done"
 ENGINE_RESULTS="$HOME/aic_results"

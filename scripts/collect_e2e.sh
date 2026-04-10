@@ -98,7 +98,7 @@ print(f"ACT_MODEL_PATH={shlex.quote(act_model_path)}")
 print(f"SAMPLING_STRATEGY={shlex.quote(strategy)}")
 print(f"GROUND_TRUTH={ground_truth}")
 print(f"TEMPLATE={shlex.quote(template)}")
-use_compressed = str(engine.get("use_compressed", True)).lower()
+use_compressed = str(engine.get("use_compressed", False)).lower()
 print(f"USE_COMPRESSED={use_compressed}")
 PY
 )"

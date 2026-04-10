@@ -362,7 +362,7 @@ def build_config(
     custom_parameters: dict | None = None,
     act_model_path: str | None = None,
     ground_truth: bool = True,
-    use_compressed: bool = True,
+    use_compressed: bool = False,
 ) -> dict[str, Any]:
     defaults = load_default_config()
     _default_act = (defaults.get("policy") or {}).get(
@@ -525,7 +525,7 @@ with tab_collect:
 
         ground_truth = st.toggle("Ground Truth 모드", value=_default_gt,
                                   help="켜면 시뮬레이터의 정확한 TF 정보를 사용 (수집용). 끄면 평가 모드 (CheatCode 사용 불가).")
-        use_compressed = st.toggle("이미지 압축 (JPEG)", value=True,
+        use_compressed = st.toggle("이미지 압축 (JPEG)", value=False,
                                     help="켜면 카메라 이미지를 JPEG 압축해서 기록 (~3GB/run). 끄면 raw 이미지 (~58GB/run).")
         act_model_path = st.text_input("ACT 모델 경로", value=_default_act_path,
                                        help="hybrid/act policy 사용 시 학습된 모델 경로")

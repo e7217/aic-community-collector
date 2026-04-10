@@ -24,15 +24,16 @@ cd aic-community-collector
 # 3. Web UI 실행
 uv run src/aic_collector/webapp.py
 ```
+## 환경 설정
 
 브라우저에서 `http://localhost:8501` 접속 후, **환경 점검** 탭에서 모든 항목이 통과하는지 확인하세요.
 
 ![환경 점검](docs/images/tab_check.png)
 
+## 데이터 수집
+
 모든 항목이 통과하면 **수집** 탭에서 Policy, 반복 횟수, 샘플링 전략을 설정하고 수집을 시작합니다.
 저장된 Config를 불러오거나 직접 설정할 수 있습니다.
-
-![수집 설정](docs/images/tab_collect.png)
 
 샘플링 전략은 씬 파라미터(케이블 위치, 각도 등)를 랜덤화하는 방법입니다:
 
@@ -40,16 +41,20 @@ uv run src/aic_collector/webapp.py
 - **Uniform** — 독립 균등 난수. 단순 랜덤이 필요할 때
 - **Sobol** — 준난수 수열. `runs`를 2의 거듭제곱(8, 16, 32...)으로 설정할 때 효과적
 
-수집이 완료되면 **결과** 탭에서 전체 성공률, 평균 점수, trial별 상세 결과를 확인할 수 있습니다.
-CSV 다운로드도 가능합니다.
-
-![수집 결과](docs/images/tab_results.png)
-
-## 내 Policy 사용하기
+### 내 Policy 사용하기
 
 1. `policies/` 디렉토리에 Python 파일 추가
 2. `aic_model.policy.Policy`를 상속하고 `insert_cable()` 구현
 3. Web UI 드롭다운에 자동 표시
+
+![수집 설정](docs/images/tab_collect.png)
+
+## 결과 확인
+
+수집이 완료되면 **결과** 탭에서 전체 성공률, 평균 점수, trial별 상세 결과를 확인할 수 있습니다.
+CSV 다운로드도 가능합니다.
+
+![수집 결과](docs/images/tab_results.png)
 
 ## Config 파일
 

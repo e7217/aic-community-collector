@@ -252,7 +252,10 @@ def check_environment() -> list[dict]:
                 ok = "aic_eval" in r.stdout
                 checks.append({"name": "Docker (aic_eval)", "ok": ok,
                                 "msg": "확인" if ok else "aic_eval 미발견",
-                                "fix": None})
+                                "fix": None if ok else (
+                                    "docker pull ghcr.io/intrinsic-dev/aic/aic_eval:latest && "
+                                    "distrobox create -r --nvidia -i ghcr.io/intrinsic-dev/aic/aic_eval:latest aic_eval"
+                                )})
     except Exception as e:
         checks.append({"name": "Docker", "ok": False, "msg": str(e)[:80], "fix": None})
 

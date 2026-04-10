@@ -363,6 +363,7 @@ with open('$params_json', 'w') as f:
             || echo "[warn] postprocess 실패"
     else
         echo "[error] $ENGINE_RESULTS 없음 — 엔진/policy 실행 실패"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 
     # 남은 임시 파일 정리
@@ -371,6 +372,7 @@ with open('$params_json', 'w') as f:
 }
 
 # ---------- 4. 전체 run 루프 ----------
+FAIL_COUNT=0
 START_TIME=$(date +%s)
 for i in $(seq 1 "$RUNS"); do
     run_one "$i"
@@ -381,11 +383,21 @@ ELAPSED=$((END_TIME - START_TIME))
 # ---------- 5. 최종 요약 ----------
 echo ""
 echo "============================================================"
-echo "  E2E 수집 완료"
+RUN_COUNT=$(ls -d "$OUTPUT_ROOT"/run_*_"$RUN_TAG" 2>/dev/null | wc -l)
+if [ "$FAIL_COUNT" -eq 0 ]; then
+    echo "  E2E 수집 완료"
+elif [ "$FAIL_COUNT" -eq "$RUNS" ]; then
+    echo "  E2E 수집 실패 (전체 $RUNS개 run 실패)"
+else
+    echo "  E2E 수집 부분 완료 ($FAIL_COUNT/$RUNS개 run 실패)"
+fi
 echo "============================================================"
 echo "총 소요 시간: ${ELAPSED}초 ($(echo "scale=2; $ELAPSED / 3600" | bc) h)"
 echo "출력 경로: $OUTPUT_ROOT"
-RUN_COUNT=$(ls -d "$OUTPUT_ROOT"/run_*_"$RUN_TAG" 2>/dev/null | wc -l)
-echo "생성된 run: $RUN_COUNT"
+echo "성공: $RUN_COUNT / 실패: $FAIL_COUNT / 전체: $RUNS"
 
 rm -f "$SAMPLES_JSON"
+
+# 전체 실패 시 비정상 종료 코드
+[ "$FAIL_COUNT" -eq "$RUNS" ] && exit 1
+exit 0

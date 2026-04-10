@@ -113,7 +113,7 @@ echo "  output_root: $OUTPUT_ROOT"
 
 # ---------- 1. 샘플링 ----------
 SAMPLES_JSON="/tmp/e2e_samples_$$.json"
-python3 "$PROJECT_DIR/scripts/sampler.py" \
+python3 "$PROJECT_DIR/src/aic_collector/sampler.py" \
     --config "$CONFIG" \
     --strategy "$SAMPLING_STRATEGY" \
     --runs "$RUNS" \
@@ -130,7 +130,7 @@ if [ "$DRY_RUN" = "1" ]; then
     echo ""
     echo "=== DRY-RUN: 첫 run의 엔진 config 미리보기 ==="
     DRY_CFG="/tmp/e2e_dry_$$.yaml"
-    python3 "$PROJECT_DIR/scripts/build_engine_config.py" \
+    python3 "$PROJECT_DIR/src/aic_collector/build_engine_config.py" \
         --template "$TEMPLATE" \
         --trials "$TRIALS" \
         --params-json "$SAMPLES_JSON" \
@@ -256,7 +256,7 @@ with open('$params_json', 'w') as f:
 "
 
     # 엔진 config 생성
-    python3 "$PROJECT_DIR/scripts/build_engine_config.py" \
+    python3 "$PROJECT_DIR/src/aic_collector/build_engine_config.py" \
         --template "$TEMPLATE" \
         --trials "$TRIALS" \
         --params-json "$SAMPLES_JSON" \
@@ -352,7 +352,7 @@ with open('$params_json', 'w') as f:
     # 4. Postprocess
     if [ -d "$ENGINE_RESULTS" ]; then
         echo "[postprocess] $run_dir 로 재편..."
-        python3 "$PROJECT_DIR/scripts/postprocess_run.py" \
+        python3 "$PROJECT_DIR/src/aic_collector/postprocess_run.py" \
             --run-dir "$run_dir" \
             --engine-results "$ENGINE_RESULTS" \
             --demo-dir "$demo_dir" \

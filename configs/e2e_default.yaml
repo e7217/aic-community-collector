@@ -59,4 +59,5 @@ tags:
 engine:
   # 엔진 기동 옵션
   ground_truth: true                      # 수집엔 true, 평가엔 false
+  use_compressed: false                   # true: JPEG 압축 (~3GB/run), false: raw (~58GB/run)
   template: configs/community_random_config.yaml

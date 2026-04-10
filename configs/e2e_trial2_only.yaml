@@ -35,4 +35,5 @@ tags:
 
 engine:
   ground_truth: true
+  use_compressed: false
   template: configs/community_random_config.yaml

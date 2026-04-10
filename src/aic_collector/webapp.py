@@ -236,7 +236,7 @@ def _aic_eval_create_hint() -> str:
     nvidia_flag = " --nvidia" if _has_nvidia_gpu() else ""
     return (
         f"docker pull ghcr.io/intrinsic-dev/aic/aic_eval:latest && "
-        f"distrobox create -r{nvidia_flag} -i ghcr.io/intrinsic-dev/aic/aic_eval:latest aic_eval"
+        f"distrobox create{nvidia_flag} -i ghcr.io/intrinsic-dev/aic/aic_eval:latest aic_eval"
     )
 
 

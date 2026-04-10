@@ -41,7 +41,7 @@ sleep 5
 
 # 4. 엔진 시작 (backgrounded)
 echo "[3/7] 엔진 시작 (trial_2 only config)..."
-distrobox enter -r aic_eval -- /entrypoint.sh \
+distrobox enter aic_eval -- /entrypoint.sh \
     ground_truth:=true start_aic_engine:=true \
     aic_engine_config_file:="$TEST_CONFIG" \
     &> /tmp/aic_smoke_engine.log &

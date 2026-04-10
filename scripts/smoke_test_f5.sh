@@ -64,7 +64,7 @@ run_once() {
     sleep 5
 
     echo "[2/5] 엔진 시작 (trial_2 only, ground_truth=true)..."
-    distrobox enter -r aic_eval -- /entrypoint.sh \
+    distrobox enter aic_eval -- /entrypoint.sh \
         ground_truth:=true start_aic_engine:=true \
         aic_engine_config_file:="$TEST_CONFIG" \
         &> "/tmp/aic_f5_${label}_engine.log" &

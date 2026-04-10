@@ -276,7 +276,7 @@ with open('$params_json', 'w') as f:
     local gt_arg="ground_truth:=true"
     [ "$GROUND_TRUTH" = "false" ] && gt_arg="ground_truth:=false"
     echo "[engine] 기동 ($gt_arg, trials=$TRIALS)..."
-    distrobox enter -r aic_eval -- /entrypoint.sh \
+    distrobox enter aic_eval -- /entrypoint.sh \
         $gt_arg start_aic_engine:=true \
         aic_engine_config_file:="$engine_cfg" \
         &> "/tmp/e2e_engine_${RUN_TAG}_run${run_idx}.log" &
@@ -289,7 +289,7 @@ with open('$params_json', 'w') as f:
     if [ "$USE_COMPRESSED" = "true" ]; then
         echo "[republish] 카메라 compressed 시작..."
         for cam in left_camera center_camera right_camera; do
-            distrobox enter -r aic_eval -- bash -c \
+            distrobox enter aic_eval -- bash -c \
                 "source /ws_aic/install/setup.bash && \
                  export RMW_IMPLEMENTATION=rmw_zenoh_cpp && \
                  ros2 run image_transport republish \

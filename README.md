@@ -34,6 +34,12 @@ uv run src/aic_collector/webapp.py
 
 ![수집 설정](docs/images/tab_collect.png)
 
+샘플링 전략은 씬 파라미터(케이블 위치, 각도 등)를 랜덤화하는 방법입니다:
+
+- **LHS** (기본 권장) — 각 차원을 N등분하여 구간마다 한 점씩 샘플링. 적은 횟수로도 고르게 커버
+- **Uniform** — 독립 균등 난수. 단순 랜덤이 필요할 때
+- **Sobol** — 준난수 수열. `runs`를 2의 거듭제곱(8, 16, 32...)으로 설정할 때 효과적
+
 수집이 완료되면 **결과** 탭에서 전체 성공률, 평균 점수, trial별 상세 결과를 확인할 수 있습니다.
 CSV 다운로드도 가능합니다.
 
@@ -57,8 +63,7 @@ CSV 다운로드도 가능합니다.
 | `e2e_test.yaml` | 빠른 테스트 (1 trial, 1 run) |
 | `e2e_trial2_only.yaml` | Trial 2만 집중 수집 |
 
-씬 파라미터 샘플링은 **LHS**(기본 권장), **Uniform**, **Sobol** 중 선택할 수 있습니다.
-전체 항목 및 샘플링 전략 설명은 [Config Reference](docs/config-reference.md)를 참고하세요.
+전체 항목 설명은 [Config Reference](docs/config-reference.md)를 참고하세요.
 
 ## CLI 사용
 

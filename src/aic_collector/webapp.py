@@ -147,10 +147,9 @@ def bg_status() -> dict | None:
         except Exception:
             pass
 
-    # 프로세스 죽었고 로그도 거의 없으면 오래된 잔재 → 자동 정리
+    # 프로세스 죽었고 정상 종료가 아니면 → 실패 상태로 표시
     if not state["running"] and not state["finished_ok"] and state["completed_runs"] == 0:
-        bg_clear()
-        return None
+        state["failed"] = True
 
     return state
 
@@ -728,27 +727,39 @@ with tab_collect:
         st.rerun()
 
     elif bg and not bg["running"]:
-        # ── 수집 완료 (백그라운드 프로세스 종료됨) ──
+        # ── 수집 완료 또는 실패 (백그라운드 프로세스 종료됨) ──
         total = bg.get("total_runs", 1)
         done = bg.get("completed_runs", 0)
 
         if bg.get("finished_ok"):
             st.success(f"🎉 수집 완료! ({done}/{total} runs)")
             st.info(f"📁 저장 경로: `{OUTPUT_ROOT}`")
+        elif bg.get("failed"):
+            st.error("수집 실패 — 스크립트가 즉시 종료되었습니다.")
+            log_lines = bg.get("log_lines", [])
+            if log_lines:
+                st.code("\n".join(log_lines), language="bash")
+            else:
+                st.warning("로그가 비어 있습니다. Docker/Distrobox 환경을 확인하세요.")
         elif done > 0:
             st.warning(f"수집이 중단됐지만 {done}/{total} runs는 완료됐습니다.")
             st.info(f"📁 저장 경로: `{OUTPUT_ROOT}`")
         else:
-            st.error("수집 실패 — 완료된 run이 없습니다. 로그를 확인하세요.")
-
-        # 로그 보기
-        with st.expander("실행 로그", expanded=False):
+            st.error("수집 실패 — 완료된 run이 없습니다.")
             log_lines = bg.get("log_lines", [])
             if log_lines:
                 st.code("\n".join(log_lines[-100:]), language="bash")
 
-        # 상태 자동 정리 — 다음 새로고침 시 대기 상태로 복귀
-        bg_clear()
+        # 로그 보기 (성공/부분완료 시)
+        if not bg.get("failed"):
+            with st.expander("실행 로그", expanded=False):
+                log_lines = bg.get("log_lines", [])
+                if log_lines:
+                    st.code("\n".join(log_lines[-100:]), language="bash")
+
+        if st.button("확인", key="btn_clear_bg"):
+            bg_clear()
+            st.rerun()
 
     else:
         # ── 대기 중 → 수집 시작 가능 ──

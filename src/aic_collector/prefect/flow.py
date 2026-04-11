@@ -38,6 +38,20 @@ CAMERAS = ["left_camera", "center_camera", "right_camera"]
 PROGRESS_FILE = Path("/tmp/e2e_prefect_progress.json")
 LOG_FILE = Path("/tmp/e2e_webapp_run.log")
 
+# task 순서 (UI 표시용)
+TASK_ORDER = [
+    "sample-parameters",
+    "deploy-policies",
+    "build-engine-config",
+    "restart-docker",
+    "launch-engine",
+    "launch-republish",
+    "run-policy",
+    "cleanup-run",
+    "postprocess",
+    "validate-run",
+]
+
 
 def _base_env() -> dict[str, str]:
     env = os.environ.copy()
@@ -46,13 +60,86 @@ def _base_env() -> dict[str, str]:
     return env
 
 
-def _write_progress(completed: int, total: int, label: str = "") -> None:
+def _read_progress() -> dict:
+    if PROGRESS_FILE.exists():
+        try:
+            return json.loads(PROGRESS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+# run 단위 task (각 run마다 반복되는 task들)
+RUN_TASK_ORDER = [
+    "build-engine-config",
+    "restart-docker",
+    "launch-engine",
+    "launch-republish",
+    "run-policy",
+    "cleanup-run",
+    "postprocess",
+    "validate-run",
+]
+
+
+def _init_progress_all(total: int) -> None:
+    """flow 시작 시점: 전체 task 상태 초기화."""
     PROGRESS_FILE.write_text(json.dumps({
+        "completed": 0,
+        "total": total,
+        "current_label": "",
+        "current_task": "",
+        "status": "running",
+        "tasks": {name: "pending" for name in TASK_ORDER},
+        "task_durations_ms": {},
+    }))
+
+
+def _write_progress(completed: int, total: int, label: str = "") -> None:
+    """run 진입 시점: run 단위 task만 pending으로 리셋."""
+    progress = _read_progress()
+    progress.update({
         "completed": completed,
         "total": total,
         "current_label": label,
         "status": "running",
-    }))
+    })
+    # run 단위 task만 리셋 (sample, deploy는 보존)
+    tasks = progress.setdefault("tasks", {name: "pending" for name in TASK_ORDER})
+    for name in RUN_TASK_ORDER:
+        tasks[name] = "pending"
+    progress["current_task"] = ""
+    PROGRESS_FILE.write_text(json.dumps(progress))
+
+
+def _update_task_state(name: str, state: str, duration_ms: int | None = None) -> None:
+    """task 상태 업데이트. state: pending | running | completed | failed."""
+    progress = _read_progress()
+    tasks = progress.setdefault("tasks", {name: "pending" for name in TASK_ORDER})
+    tasks[name] = state
+    if state == "running":
+        progress["current_task"] = name
+    if duration_ms is not None:
+        progress.setdefault("task_durations_ms", {})[name] = duration_ms
+    PROGRESS_FILE.write_text(json.dumps(progress))
+
+
+def _task_timer(name: str):
+    """task 시작/종료를 기록하는 컨텍스트 매니저."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ctx():
+        start = time.time()
+        _update_task_state(name, "running")
+        try:
+            yield
+            _update_task_state(name, "completed", int((time.time() - start) * 1000))
+        except Exception:
+            _update_task_state(name, "failed", int((time.time() - start) * 1000))
+            raise
+
+    return _ctx()
 
 
 def _append_log(msg: str) -> None:
@@ -73,15 +160,17 @@ def sample_parameters_task(
     seed: int,
 ) -> list[dict[str, float]]:
     """파라미터 샘플링."""
-    samples = sample_parameters(params_cfg, strategy, runs, seed)
-    print(f"[sampler] {len(samples)}개 샘플 생성")
-    return samples
+    with _task_timer("sample-parameters"):
+        samples = sample_parameters(params_cfg, strategy, runs, seed)
+        print(f"[sampler] {len(samples)}개 샘플 생성")
+        return samples
 
 
 @task(name="deploy-policies")
 def deploy_policies_task(project_dir: str) -> None:
     """Policy 파일을 pixi env에 배포."""
-    deploy_policies(project_dir)
+    with _task_timer("deploy-policies"):
+        deploy_policies(project_dir)
 
 
 @task(name="build-engine-config", retries=3, retry_delay_seconds=2)
@@ -92,47 +181,49 @@ def build_engine_config_task(
     out_path: str,
 ) -> str:
     """엔진 config 생성 (템플릿 + trial 필터 + 파라미터 치환)."""
-    cfg_text = build_engine_cfg(Path(template_path), trial_ids, sample)
-    Path(out_path).write_text(cfg_text)
-    print(f"[ok] wrote {out_path}")
-    return out_path
+    with _task_timer("build-engine-config"):
+        cfg_text = build_engine_cfg(Path(template_path), trial_ids, sample)
+        Path(out_path).write_text(cfg_text)
+        print(f"[ok] wrote {out_path}")
+        return out_path
 
 
 @task(name="restart-docker", retries=2, retry_delay_seconds=10)
 def restart_docker_task(container: str = "aic_eval") -> None:
     """Docker 컨테이너 재시작 + distrobox init 보장."""
-    env = _base_env()
+    with _task_timer("restart-docker"):
+        env = _base_env()
 
-    # distrobox init 보장
-    user = os.environ.get("USER", "root")
-    ret, _ = run_shell_process(
-        ["docker", "exec", container, "id", user],
-        log_path="/tmp/e2e_docker_init.log",
-        env=env,
-    )
-    if ret != 0:
-        print("[init] distrobox 최초 초기화 중...")
-        run_shell_process(
-            ["distrobox", "enter", container, "--", "true"],
+        # distrobox init 보장
+        user = os.environ.get("USER", "root")
+        ret, _ = run_shell_process(
+            ["docker", "exec", container, "id", user],
             log_path="/tmp/e2e_docker_init.log",
             env=env,
         )
-        print("[init] 초기화 완료")
+        if ret != 0:
+            print("[init] distrobox 최초 초기화 중...")
+            run_shell_process(
+                ["distrobox", "enter", container, "--", "true"],
+                log_path="/tmp/e2e_docker_init.log",
+                env=env,
+            )
+            print("[init] 초기화 완료")
 
-    # 이전 결과 치우기
-    READY_FLAG.unlink(missing_ok=True)
-    DONE_FLAG.unlink(missing_ok=True)
-    if ENGINE_RESULTS.exists():
-        backup = ENGINE_RESULTS.parent / f"aic_results_e2e_backup_{int(time.time())}"
-        shutil.move(str(ENGINE_RESULTS), str(backup))
+        # 이전 결과 치우기
+        READY_FLAG.unlink(missing_ok=True)
+        DONE_FLAG.unlink(missing_ok=True)
+        if ENGINE_RESULTS.exists():
+            backup = ENGINE_RESULTS.parent / f"aic_results_e2e_backup_{int(time.time())}"
+            shutil.move(str(ENGINE_RESULTS), str(backup))
 
-    print("[engine] 컨테이너 재시작...")
-    run_shell_process(
-        ["docker", "restart", container],
-        log_path="/tmp/e2e_docker_restart.log",
-        env=env,
-    )
-    time.sleep(5)
+        print("[engine] 컨테이너 재시작...")
+        run_shell_process(
+            ["docker", "restart", container],
+            log_path="/tmp/e2e_docker_restart.log",
+            env=env,
+        )
+        time.sleep(5)
 
 
 @task(name="launch-engine")
@@ -144,24 +235,25 @@ def launch_engine_task(
     startup_wait: int = 25,
 ) -> dict:
     """엔진 프로세스 백그라운드 기동. {pid, log_path} 반환."""
-    gt_arg = "ground_truth:=true" if ground_truth else "ground_truth:=false"
-    log_path = f"/tmp/e2e_engine_{run_tag}_run{run_idx}.log"
-    env = _base_env()
+    with _task_timer("launch-engine"):
+        gt_arg = "ground_truth:=true" if ground_truth else "ground_truth:=false"
+        log_path = f"/tmp/e2e_engine_{run_tag}_run{run_idx}.log"
+        env = _base_env()
 
-    pid = run_process_background(
-        [
-            "distrobox", "enter", "aic_eval", "--",
-            "/entrypoint.sh",
-            gt_arg,
-            "start_aic_engine:=true",
-            f"aic_engine_config_file:={engine_cfg}",
-        ],
-        log_path=log_path,
-        env=env,
-    )
-    print(f"[engine] 기동 (pid={pid}, {gt_arg})")
-    time.sleep(startup_wait)
-    return {"pid": pid, "log_path": log_path}
+        pid = run_process_background(
+            [
+                "distrobox", "enter", "aic_eval", "--",
+                "/entrypoint.sh",
+                gt_arg,
+                "start_aic_engine:=true",
+                f"aic_engine_config_file:={engine_cfg}",
+            ],
+            log_path=log_path,
+            env=env,
+        )
+        print(f"[engine] 기동 (pid={pid}, {gt_arg})")
+        time.sleep(startup_wait)
+        return {"pid": pid, "log_path": log_path}
 
 
 @task(name="launch-republish")
@@ -171,31 +263,32 @@ def launch_republish_task(
     run_idx: int,
 ) -> list[int]:
     """카메라 compressed republish 프로세스 기동. PID 리스트 반환."""
-    if not use_compressed:
-        print("[republish] 이미지 압축 비활성화 — raw 이미지 사용")
-        return []
+    with _task_timer("launch-republish"):
+        if not use_compressed:
+            print("[republish] 이미지 압축 비활성화 — raw 이미지 사용")
+            return []
 
-    env = _base_env()
-    pids = []
-    print("[republish] 카메라 compressed 시작...")
-    for cam in CAMERAS:
-        log_path = f"/tmp/e2e_republish_{cam}_{run_tag}_run{run_idx}.log"
-        pid = run_process_background(
-            [
-                "distrobox", "enter", "aic_eval", "--", "bash", "-c",
-                f"source /ws_aic/install/setup.bash && "
-                f"export RMW_IMPLEMENTATION=rmw_zenoh_cpp && "
-                f"ros2 run image_transport republish "
-                f"--ros-args -p in_transport:=raw -p out_transport:=compressed "
-                f"-r in:=/{cam}/image -r out/compressed:=/{cam}/image/compressed "
-                f"-p use_sim_time:=true",
-            ],
-            log_path=log_path,
-            env=env,
-        )
-        pids.append(pid)
-    time.sleep(3)
-    return pids
+        env = _base_env()
+        pids = []
+        print("[republish] 카메라 compressed 시작...")
+        for cam in CAMERAS:
+            log_path = f"/tmp/e2e_republish_{cam}_{run_tag}_run{run_idx}.log"
+            pid = run_process_background(
+                [
+                    "distrobox", "enter", "aic_eval", "--", "bash", "-c",
+                    f"source /ws_aic/install/setup.bash && "
+                    f"export RMW_IMPLEMENTATION=rmw_zenoh_cpp && "
+                    f"ros2 run image_transport republish "
+                    f"--ros-args -p in_transport:=raw -p out_transport:=compressed "
+                    f"-r in:=/{cam}/image -r out/compressed:=/{cam}/image/compressed "
+                    f"-p use_sim_time:=true",
+                ],
+                log_path=log_path,
+                env=env,
+            )
+            pids.append(pid)
+        time.sleep(3)
+        return pids
 
 
 @task(name="run-policy", timeout_seconds=360)
@@ -207,32 +300,33 @@ def run_policy_task(
     policy_timeout: int = 300,
 ) -> bool:
     """Policy 실행, on_shutdown 대기. 성공 여부 반환."""
-    log_path = f"/tmp/e2e_policy_{run_tag}_run{run_idx}.log"
+    with _task_timer("run-policy"):
+        log_path = f"/tmp/e2e_policy_{run_tag}_run{run_idx}.log"
 
-    env = _base_env()
-    env.update(policy_env)
-    env["AIC_DEMO_DIR"] = demo_dir
-    env["AIC_F5_ENABLED"] = os.environ.get("AIC_F5_ENABLED", "1")
+        env = _base_env()
+        env.update(policy_env)
+        env["AIC_DEMO_DIR"] = demo_dir
+        env["AIC_F5_ENABLED"] = os.environ.get("AIC_F5_ENABLED", "1")
 
-    policy_class = policy_env.get("POLICY_CLASS", POLICY_CLASS)
-    print(f"[policy] {policy_class} 실행...")
+        policy_class = policy_env.get("POLICY_CLASS", POLICY_CLASS)
+        print(f"[policy] {policy_class} 실행...")
 
-    matched, pid = run_process_until_log_match(
-        [
-            "pixi", "run", "ros2", "run", "aic_model", "aic_model",
-            "--ros-args", "-p", "use_sim_time:=true",
-            "-p", f"policy:={policy_class}",
-        ],
-        log_path=log_path,
-        pattern="on_shutdown",
-        timeout_sec=policy_timeout,
-        env=env,
-        cwd=PIXI_CWD,
-    )
+        matched, pid = run_process_until_log_match(
+            [
+                "pixi", "run", "ros2", "run", "aic_model", "aic_model",
+                "--ros-args", "-p", "use_sim_time:=true",
+                "-p", f"policy:={policy_class}",
+            ],
+            log_path=log_path,
+            pattern="on_shutdown",
+            timeout_sec=policy_timeout,
+            env=env,
+            cwd=PIXI_CWD,
+        )
 
-    if not matched:
-        print(f"[warn] Policy 타임아웃 ({policy_timeout}초)")
-    return matched
+        if not matched:
+            print(f"[warn] Policy 타임아웃 ({policy_timeout}초)")
+        return matched
 
 
 @task(name="cleanup-run")
@@ -241,17 +335,23 @@ def cleanup_task(
     republish_pids: list[int],
 ) -> None:
     """프로세스 정리 (republish → policy → engine)."""
-    for pid in republish_pids:
-        kill_process_tree(pid)
+    with _task_timer("cleanup-run"):
+        for pid in republish_pids:
+            kill_process_tree(pid)
 
-    pkill_pattern("aic_model")
+        pkill_pattern("aic_model")
 
-    if engine_handle and engine_handle.get("pid", -1) > 0:
-        kill_process_tree(engine_handle["pid"], grace_sec=3)
+        if engine_handle and engine_handle.get("pid", -1) > 0:
+            kill_process_tree(engine_handle["pid"], grace_sec=3)
 
 
 def _build_run_summary_markdown(
-    run_dir: str, policy: str, seed: int, params: dict[str, float], success: bool
+    run_dir: str,
+    policy: str,
+    seed: int,
+    params: dict[str, float],
+    success: bool,
+    validation: dict | None = None,
 ) -> str:
     """run 결과를 Prefect 아티팩트용 markdown으로 변환."""
     run_name = Path(run_dir).name
@@ -271,6 +371,22 @@ def _build_run_summary_markdown(
         f"| `{k}` | {v:.4f} |" for k, v in sorted(params.items())
     )
 
+    # 검증 결과 섹션
+    validation_md = ""
+    if validation:
+        checks = validation.get("checks", [])
+        warnings_list = validation.get("warnings", [])
+        validation_md = "\n## Validation\n\n"
+        if checks:
+            validation_md += "| Check | Result |\n|-------|--------|\n"
+            for c in checks:
+                icon = "✅" if c["passed"] else "❌"
+                validation_md += f"| {c['name']} | {icon} |\n"
+        if warnings_list:
+            validation_md += "\n**경고:**\n"
+            for w in warnings_list:
+                validation_md += f"- ⚠️ {w}\n"
+
     md = f"""# Run {run_name}
 
 **상태**: {status}
@@ -288,12 +404,130 @@ def _build_run_summary_markdown(
 | Name | Value |
 |------|-------|
 {params_rows}
-
+{validation_md}
 ## Output
 
 `{run_dir}`
 """
     return md
+
+
+# ---------------------------------------------------------------------------
+# 검증 태스크
+# ---------------------------------------------------------------------------
+
+def _validate_run_dir(run_dir: Path) -> dict:
+    """run 산출물 구조/크기 검증. {checks, warnings, passed_count, total_count} 반환."""
+    checks = []
+    warnings_list = []
+
+    def _check(name: str, passed: bool, warn: str | None = None):
+        checks.append({"name": name, "passed": passed})
+        if not passed and warn:
+            warnings_list.append(warn)
+
+    # 1. run_dir 존재
+    _check("run 디렉토리 존재", run_dir.exists(), f"{run_dir} 없음")
+    if not run_dir.exists():
+        return {
+            "checks": checks, "warnings": warnings_list,
+            "passed_count": 0, "total_count": len(checks),
+        }
+
+    # 2. 메타 파일들
+    _check("config.yaml", (run_dir / "config.yaml").exists(), "엔진 config 복사 안 됨")
+    _check("scoring_run.yaml", (run_dir / "scoring_run.yaml").exists(), "전체 scoring 없음")
+    _check("policy.txt", (run_dir / "policy.txt").exists(), "policy 메타 없음")
+    _check("seed.txt", (run_dir / "seed.txt").exists(), "seed 메타 없음")
+
+    # 3. trial 디렉토리
+    trial_dirs = sorted(run_dir.glob("trial_*_score*"))
+    _check("trial 디렉토리 ≥ 1개", len(trial_dirs) > 0, "trial 디렉토리 없음")
+
+    for td in trial_dirs:
+        prefix = td.name
+
+        # bag 존재
+        bag_dir = td / "bag"
+        mcap_files = list(bag_dir.glob("*.mcap")) if bag_dir.exists() else []
+        _check(
+            f"{prefix}/bag/*.mcap",
+            len(mcap_files) > 0,
+            f"{prefix}: bag mcap 없음",
+        )
+        if mcap_files:
+            bag_size = mcap_files[0].stat().st_size
+            if bag_size < 1024:  # 1KB 미만은 비정상
+                warnings_list.append(f"{prefix}: bag 파일 크기 비정상 ({bag_size} bytes)")
+
+        # episode 존재
+        episode_dir = td / "episode"
+        _check(f"{prefix}/episode/", episode_dir.exists(), f"{prefix}: episode 없음")
+
+        if episode_dir.exists():
+            # 필수 npy 파일
+            for npy in ["states.npy", "actions.npy", "wrenches.npy"]:
+                _check(
+                    f"{prefix}/episode/{npy}",
+                    (episode_dir / npy).exists(),
+                    f"{prefix}: {npy} 없음",
+                )
+
+            # 이미지 디렉토리
+            images_dir = episode_dir / "images"
+            if images_dir.exists():
+                for cam in ["left", "center", "right"]:
+                    cam_dir = images_dir / cam
+                    n_images = len(list(cam_dir.glob("*.png"))) if cam_dir.exists() else 0
+                    _check(
+                        f"{prefix}/images/{cam}/ ≥ 1 PNG",
+                        n_images > 0,
+                        f"{prefix}/{cam}: 이미지 없음",
+                    )
+
+            # metadata.json
+            _check(
+                f"{prefix}/episode/metadata.json",
+                (episode_dir / "metadata.json").exists(),
+                f"{prefix}: metadata.json 없음",
+            )
+
+        # scoring/tags
+        _check(f"{prefix}/scoring.yaml", (td / "scoring.yaml").exists(), f"{prefix}: scoring.yaml 없음")
+        _check(f"{prefix}/tags.json", (td / "tags.json").exists(), f"{prefix}: tags.json 없음")
+
+    passed = sum(1 for c in checks if c["passed"])
+    return {
+        "checks": checks,
+        "warnings": warnings_list,
+        "passed_count": passed,
+        "total_count": len(checks),
+    }
+
+
+@task(name="validate-run")
+def validate_run_task(run_dir: str) -> dict:
+    """run 산출물의 구조/크기/완결성 검증. 결과를 run_dir/validation.json에도 저장."""
+    with _task_timer("validate-run"):
+        result = _validate_run_dir(Path(run_dir))
+        passed = result["passed_count"]
+        total = result["total_count"]
+        if passed == total:
+            print(f"[validate] ✅ {passed}/{total} 체크 통과")
+        else:
+            print(f"[validate] ⚠️  {passed}/{total} 체크 통과, 경고 {len(result['warnings'])}개")
+            for w in result["warnings"]:
+                print(f"  - {w}")
+
+        # run_dir에 저장 (webapp 결과 탭에서 조회)
+        try:
+            (Path(run_dir) / "validation.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2)
+            )
+        except Exception:
+            pass
+
+        return result
 
 
 @task(name="postprocess", retries=2, retry_delay_seconds=5)
@@ -305,51 +539,59 @@ def postprocess_task(
     seed: int,
     params: dict[str, float],
 ) -> dict:
-    """run 산출물 재편 + Prefect artifact 기록."""
-    if not ENGINE_RESULTS.exists():
-        print(f"[error] {ENGINE_RESULTS} 없음 — 엔진/policy 실행 실패")
-        try:
-            create_markdown_artifact(
-                key=f"run-{Path(run_dir).name.replace('_', '-')}",
-                markdown=_build_run_summary_markdown(run_dir, policy, seed, params, False),
-                description="수집 실패: 엔진 결과 없음",
-            )
-        except Exception:
-            pass
-        return {"success": False, "run_dir": run_dir}
+    """run 산출물 재편."""
+    with _task_timer("postprocess"):
+        if not ENGINE_RESULTS.exists():
+            print(f"[error] {ENGINE_RESULTS} 없음 — 엔진/policy 실행 실패")
+            return {"success": False, "run_dir": run_dir}
 
-    print(f"[postprocess] {run_dir} 로 재편...")
-    params_json_path = Path(f"/tmp/e2e_params_{Path(run_dir).name}.json")
-    params_json_path.write_text(json.dumps(params))
+        print(f"[postprocess] {run_dir} 로 재편...")
+        params_json_path = Path(f"/tmp/e2e_params_{Path(run_dir).name}.json")
+        params_json_path.write_text(json.dumps(params))
 
-    rc = process_run(
-        run_dir=Path(run_dir),
-        engine_results=ENGINE_RESULTS,
-        demo_dir=Path(demo_dir),
-        engine_config=Path(engine_cfg),
-        policy=policy,
-        seed=seed,
-        parameters=params,
-    )
+        rc = process_run(
+            run_dir=Path(run_dir),
+            engine_results=ENGINE_RESULTS,
+            demo_dir=Path(demo_dir),
+            engine_config=Path(engine_cfg),
+            policy=policy,
+            seed=seed,
+            parameters=params,
+        )
 
-    params_json_path.unlink(missing_ok=True)
+        params_json_path.unlink(missing_ok=True)
 
-    success = rc == 0
-    if success:
-        _append_log(f"[done] run 재편 완료: {run_dir}")
-    else:
-        print("[warn] postprocess 실패")
+        success = rc == 0
+        if success:
+            _append_log(f"[done] run 재편 완료: {run_dir}")
+        else:
+            print("[warn] postprocess 실패")
 
+        return {"success": success, "run_dir": run_dir}
+
+
+def _emit_run_artifact(
+    run_dir: str,
+    policy: str,
+    seed: int,
+    params: dict[str, float],
+    success: bool,
+    validation: dict | None,
+) -> None:
+    """run 요약 markdown artifact를 Prefect에 기록."""
     try:
+        desc = f"Run {Path(run_dir).name} 결과 요약"
+        if validation and validation.get("warnings"):
+            desc += f" (경고 {len(validation['warnings'])}개)"
         create_markdown_artifact(
             key=f"run-{Path(run_dir).name.replace('_', '-')}",
-            markdown=_build_run_summary_markdown(run_dir, policy, seed, params, success),
-            description=f"Run {Path(run_dir).name} 결과 요약",
+            markdown=_build_run_summary_markdown(
+                run_dir, policy, seed, params, success, validation
+            ),
+            description=desc,
         )
     except Exception:
         pass
-
-    return {"success": success, "run_dir": run_dir}
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +671,22 @@ def run_one(
     # 7. 후처리
     result = postprocess_task(run_dir, demo_dir, engine_cfg_path, policy_default, seed, sample)
 
+    # 8. 검증
+    validation = None
+    if result.get("success"):
+        validation = validate_run_task(run_dir)
+        result["validation"] = validation
+
+    # 9. Artifact 기록 (검증 결과 포함)
+    _emit_run_artifact(
+        run_dir=run_dir,
+        policy=policy_default,
+        seed=seed,
+        params=sample,
+        success=result.get("success", False),
+        validation=validation,
+    )
+
     # 임시 파일 정리
     Path(engine_cfg_path).unlink(missing_ok=True)
     shutil.rmtree(demo_dir, ignore_errors=True)
@@ -469,9 +727,9 @@ def collect_e2e_flow(
     if not (Path(project_dir) / "policies").exists():
         project_dir = str(Path.cwd())
 
-    # 진행 상태 초기화
+    # 진행 상태 초기화 (전체 task pending)
     LOG_FILE.write_text("")
-    _write_progress(0, runs)
+    _init_progress_all(runs)
 
     # 1. 샘플링
     samples = sample_parameters_task(params_cfg, strategy, runs, seed)
@@ -523,13 +781,15 @@ def collect_e2e_flow(
     print(f"성공: {runs - fail_count} / 실패: {fail_count} / 전체: {runs}")
 
     _append_log("E2E 수집 완료")
-    PROGRESS_FILE.write_text(json.dumps({
+    final_progress = _read_progress()
+    final_progress.update({
         "completed": runs,
         "total": runs,
         "status": "completed" if fail_count < runs else "failed",
         "fail_count": fail_count,
         "elapsed_sec": elapsed,
-    }))
+    })
+    PROGRESS_FILE.write_text(json.dumps(final_progress))
 
     return {
         "runs": runs,

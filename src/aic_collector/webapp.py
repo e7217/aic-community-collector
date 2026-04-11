@@ -252,12 +252,18 @@ def bg_status() -> dict | None:
     state["completed_runs"] = 0
     state["current_label"] = ""
     state["finished_ok"] = False
+    state["tasks"] = {}
+    state["current_task"] = ""
+    state["task_durations_ms"] = {}
     if PROGRESS_FILE.exists():
         try:
             progress = json.loads(PROGRESS_FILE.read_text())
             state["completed_runs"] = progress.get("completed", 0)
             state["current_label"] = progress.get("current_label", "")
             state["total_runs"] = progress.get("total", state.get("total_runs", 0))
+            state["tasks"] = progress.get("tasks", {})
+            state["current_task"] = progress.get("current_task", "")
+            state["task_durations_ms"] = progress.get("task_durations_ms", {})
             pstatus = progress.get("status", "")
             if pstatus == "completed":
                 state["finished_ok"] = True
@@ -450,6 +456,29 @@ def check_environment() -> list[dict]:
 # ---------------------------------------------------------------------------
 # 결과 로드
 # ---------------------------------------------------------------------------
+
+
+def load_run_validations() -> list[dict]:
+    """run 디렉토리의 validation.json을 스캔해 경고가 있는 run만 반환."""
+    warnings_list = []
+    if not OUTPUT_ROOT.exists():
+        return warnings_list
+    for run_dir in sorted(OUTPUT_ROOT.glob("run_*"), reverse=True)[:20]:
+        v_path = run_dir / "validation.json"
+        if not v_path.exists():
+            continue
+        try:
+            v = json.loads(v_path.read_text())
+            if v.get("warnings"):
+                warnings_list.append({
+                    "run": run_dir.name,
+                    "passed": v.get("passed_count", 0),
+                    "total": v.get("total_count", 0),
+                    "warnings": v.get("warnings", []),
+                })
+        except Exception:
+            continue
+    return warnings_list
 
 
 def load_results() -> list[dict]:
@@ -846,7 +875,39 @@ with tab_collect:
         else:
             st.progress(0, text=f"⏳ {label} 진행 중..." if label else "⏳ 엔진 기동 중...")
 
-        with st.expander("실행 로그", expanded=True):
+        # 단계별 진행 상태
+        tasks = bg.get("tasks", {})
+        durations = bg.get("task_durations_ms", {})
+        if tasks:
+            st.markdown("##### 현재 run 진행 단계")
+            task_labels = {
+                "sample-parameters": "파라미터 샘플링",
+                "deploy-policies": "Policy 배포",
+                "build-engine-config": "엔진 config 생성",
+                "restart-docker": "컨테이너 재시작",
+                "launch-engine": "엔진 기동",
+                "launch-republish": "이미지 republish",
+                "run-policy": "Policy 실행",
+                "cleanup-run": "프로세스 정리",
+                "postprocess": "산출물 재편",
+                "validate-run": "검증",
+            }
+            state_icons = {
+                "pending": "⏳",
+                "running": "🔄",
+                "completed": "✅",
+                "failed": "❌",
+            }
+            lines = []
+            for task_name, label_ko in task_labels.items():
+                tstate = tasks.get(task_name, "pending")
+                icon = state_icons.get(tstate, "⏳")
+                dur_ms = durations.get(task_name)
+                dur_str = f" ({dur_ms/1000:.1f}s)" if dur_ms and tstate == "completed" else ""
+                lines.append(f"{icon} **{label_ko}**{dur_str}")
+            st.markdown("\n\n".join(lines))
+
+        with st.expander("실행 로그", expanded=False):
             log_lines = bg.get("log_lines", [])
             if log_lines:
                 st.code("\n".join(log_lines[-50:]), language="bash")
@@ -967,6 +1028,17 @@ with tab_results:
 
         # 테이블
         st.dataframe(df, width="stretch", hide_index=True)
+
+        # 검증 경고
+        validations = load_run_validations()
+        if validations:
+            with st.expander(f"⚠️  검증 경고 ({len(validations)}개 run)", expanded=False):
+                for v in validations:
+                    st.markdown(
+                        f"**{v['run']}** — {v['passed']}/{v['total']} 체크 통과"
+                    )
+                    for w in v["warnings"]:
+                        st.markdown(f"  - ⚠️ {w}")
 
         # CSV 다운로드 + 삭제
         col_dl, col_del = st.columns(2)

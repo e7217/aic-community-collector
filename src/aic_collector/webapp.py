@@ -795,6 +795,8 @@ with tab_collect:
 
         # 해당 trial의 삽입 대상 파라미터 범위
         with st.expander(f"📐 Trial {i} 파라미터 범위", expanded=False):
+            if sampling == "static":
+                st.caption("⚠️ static 샘플링은 AIC 공식 고정값을 사용합니다. 파라미터 범위가 무시됩니다.")
             for key, label, (phys_min, phys_max) in info["params"]:
                 p = _params.get(key, {})
                 cur_min = float(p.get("min", phys_min))
@@ -807,13 +809,15 @@ with tab_collect:
                     step=0.001,
                     format="%.4f",
                     key=f"param_{key}",
-                    disabled=not on,
+                    disabled=not on or sampling == "static",
                 )
                 custom_params[key] = {"min": slider_val[0], "max": slider_val[1]}
 
     # ── 공통 씬 파라미터 (SC0) ──
     with st.expander("📐 공통 파라미터 — SC 카드 0 (Trial 1, 2 씬 배경)", expanded=False):
         st.caption("Trial 1, 2의 씬에 배치되는 SC 카드 위치. 삽입 대상은 아니지만 씬 다양성에 영향.")
+        if sampling == "static":
+            st.caption("⚠️ static 샘플링은 AIC 공식 고정값을 사용합니다. 파라미터 범위가 무시됩니다.")
         for key, label, (phys_min, phys_max) in [
             ("sc0_translation", "SC0 위치 (m)", PHYS_LIMITS["sc_translation"]),
             ("sc0_yaw", "SC0 회전 (rad)", PHYS_LIMITS["sc_yaw"]),
@@ -829,6 +833,7 @@ with tab_collect:
                 step=0.001,
                 format="%.4f",
                 key=f"param_{key}",
+                disabled=sampling == "static",
             )
             custom_params[key] = {"min": slider_val[0], "max": slider_val[1]}
 

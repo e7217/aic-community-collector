@@ -243,6 +243,10 @@ class CollectWrapper(Policy):
     def insert_cable(self, task, get_observation, move_robot, send_feedback, **kwargs):
         if self._collect_episode:
             self._init_episode(task)
+        else:
+            # episode 비활성화 시에도 _task_meta 최소 초기화
+            # (_check_insertion_success 등에서 참조하므로 필요)
+            self._task_meta = {}
 
         # F5: 매 trial 시작 시 조기 종료 플래그 리셋 (이전 trial 이월 방지)
         self._insertion_complete = False

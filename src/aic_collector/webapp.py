@@ -518,13 +518,14 @@ def load_results() -> list[dict]:
             try:
                 with open(tags_path) as f:
                     t = json.load(f)
+                dur_raw = t.get("trial_duration_sec")
                 rows.append({
                     "time": run_time,
                     "run": run_dir.name,
                     "trial": t.get("trial", "?"),
                     "score": round(t.get("scoring", {}).get("total", 0), 1),
                     "success": "✅" if t.get("success") else "❌",
-                    "duration": round(t.get("trial_duration_sec", 0), 1),
+                    "duration": round(dur_raw, 1) if dur_raw is not None else "-",
                     "policy": t.get("policy", "?"),
                     "조기종료": "⚡" if t.get("early_terminated") else "",
                 })

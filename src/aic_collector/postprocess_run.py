@@ -164,6 +164,77 @@ def fix_episode_metadata_trial(ep_dir: Path, trial_num: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Fallback: bag / scoring / config 에서 대체 데이터 추출
+# ---------------------------------------------------------------------------
+
+
+def _bag_duration_sec(bag_dir: Path | None) -> float | None:
+    """bag/metadata.yaml의 duration(nanoseconds)에서 초 단위 값 반환."""
+    if not bag_dir:
+        return None
+    meta_path = bag_dir / "metadata.yaml"
+    if not meta_path.exists():
+        return None
+    try:
+        with open(meta_path) as f:
+            meta = yaml.safe_load(f) or {}
+        ns = meta.get("rosbag2_bagfile_information", {}).get("duration", {}).get("nanoseconds")
+        if ns is not None:
+            return round(int(ns) / 1e9, 3)
+    except Exception:
+        pass
+    return None
+
+
+def _bag_has_insertion_event(bag_dir: Path | None) -> bool | None:
+    """bag/metadata.yaml에서 /scoring/insertion_event 메시지가 1건 이상이면 True."""
+    if not bag_dir:
+        return None
+    meta_path = bag_dir / "metadata.yaml"
+    if not meta_path.exists():
+        return None
+    try:
+        with open(meta_path) as f:
+            meta = yaml.safe_load(f) or {}
+        topics = meta.get("rosbag2_bagfile_information", {}).get("topics_with_message_count", [])
+        for t in topics:
+            name = t.get("topic_metadata", {}).get("name", "")
+            if name == "/scoring/insertion_event" and t.get("message_count", 0) > 0:
+                return True
+        return False
+    except Exception:
+        return None
+
+
+def _scoring_duration_sec(trial_scoring: dict) -> float | None:
+    """scoring tier_2 > duration > message에서 'Task duration: N.NN seconds' 파싱."""
+    tier_2 = trial_scoring.get("tier_2") or {}
+    cats = tier_2.get("categories") or {}
+    dur_msg = str((cats.get("duration") or {}).get("message", ""))
+    m = re.search(r"Task duration:\s*([\d.]+)\s*seconds", dur_msg)
+    if m:
+        return round(float(m.group(1)), 3)
+    return None
+
+
+def _config_task_info(engine_config: Path | None, trial_key: str) -> dict:
+    """engine config의 trials.<trial_key>.tasks.task_1에서 cable/plug/port_type 추출."""
+    if not engine_config or not engine_config.exists():
+        return {}
+    try:
+        with open(engine_config) as f:
+            cfg = yaml.safe_load(f) or {}
+        task = (cfg.get("trials", {}).get(trial_key, {}).get("tasks") or {}).get("task_1") or {}
+        info: dict[str, Any] = {}
+        for key in ("cable_type", "plug_type", "port_type"):
+            if key in task:
+                info[key] = task[key]
+        return info
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # tags.json 생성
 # ---------------------------------------------------------------------------
 
@@ -175,12 +246,17 @@ def build_tags(
     policy: str,
     seed: int | None,
     parameters: dict[str, float] | None,
+    *,
+    bag_dir: Path | None = None,
+    engine_config: Path | None = None,
 ) -> dict[str, Any]:
     """
     trial별 tags.json을 생성. 스키마는 추후 확장 가능.
 
     - success: tier_3 메시지가 "successful" 포함하면 True
-    - cable/plug/port_type: episode metadata.json에서 복사
+    - cable/plug/port_type: episode metadata.json에서 복사, 없으면 engine config에서 추출
+    - trial_duration_sec: episode → scoring tier_2 → bag duration 순으로 fallback
+    - early_terminated: episode → bag insertion_event → scoring tier_3 순으로 fallback
     - policy, seed: 인자로 전달받음
     - parameters: 이 run에 주입된 파라미터 값 (dict)
     """
@@ -212,6 +288,35 @@ def build_tags(
             tags["early_term_source"] = episode_meta["early_term_source"]
         if "trial_duration_sec" in episode_meta:
             tags["trial_duration_sec"] = episode_meta["trial_duration_sec"]
+    else:
+        # Fallback: episode 없을 때 대안 소스에서 추출
+        trial_key = f"trial_{trial_num}"
+
+        # cable/plug/port_type ← engine config
+        cfg_info = _config_task_info(engine_config, trial_key)
+        for key in ("cable_type", "plug_type", "port_type"):
+            if key in cfg_info:
+                tags[key] = cfg_info[key]
+
+        # trial_duration_sec ← scoring tier_2 → bag duration
+        dur = _scoring_duration_sec(trial_scoring)
+        if dur is None:
+            dur = _bag_duration_sec(bag_dir)
+        if dur is not None:
+            tags["trial_duration_sec"] = dur
+
+        # early_terminated ← bag insertion_event → scoring tier_3 → 실패 시 false
+        bag_ie = _bag_has_insertion_event(bag_dir)
+        if bag_ie is not None:
+            tags["early_terminated"] = bag_ie
+            if bag_ie:
+                tags["early_term_source"] = "insertion_event"
+        elif success_from_scoring:
+            tags["early_terminated"] = True
+            tags["early_term_source"] = "insertion_event"
+        else:
+            # bag도 없고 성공도 아닌 경우: 삽입 이벤트 없었음
+            tags["early_terminated"] = False
 
     if parameters:
         tags["parameters"] = parameters
@@ -331,6 +436,7 @@ def process_run(
                 print(f"[warn] {trial_key}: trial_order 비어있음 — engine_config 확인 필요")
 
         # 2-d. tags.json 생성
+        dst_bag = trial_dir / "bag" if (trial_dir / "bag").exists() else None
         tags = build_tags(
             trial_num=trial_num,
             trial_scoring=trial_scoring,
@@ -338,6 +444,8 @@ def process_run(
             policy=policy,
             seed=seed,
             parameters=parameters,
+            bag_dir=dst_bag,
+            engine_config=engine_config,
         )
         with open(trial_dir / "tags.json", "w") as f:
             json.dump(tags, f, indent=2, ensure_ascii=False)

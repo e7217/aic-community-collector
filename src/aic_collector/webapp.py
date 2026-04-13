@@ -525,7 +525,7 @@ def load_results() -> list[dict]:
                     "trial": t.get("trial", "?"),
                     "score": round(t.get("scoring", {}).get("total", 0), 1),
                     "success": "✅" if t.get("success") else "❌",
-                    "duration": round(dur_raw, 1) if dur_raw is not None else "-",
+                    "duration": round(dur_raw, 1) if dur_raw is not None else None,
                     "policy": t.get("policy", "?"),
                     "조기종료": "⚡" if t.get("early_terminated") else "",
                 })

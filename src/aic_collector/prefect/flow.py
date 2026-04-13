@@ -291,7 +291,7 @@ def launch_republish_task(
         return pids
 
 
-@task(name="run-policy", timeout_seconds=360)
+@task(name="run-policy", timeout_seconds=900)
 def run_policy_task(
     policy_env: dict[str, str],
     demo_dir: str,
@@ -666,7 +666,10 @@ def run_one(
             act_model_path = os.path.expanduser(act_model_path)
         policy_env = build_policy_env(policy_default, per_trial, act_model_path)
 
-        run_policy_task(policy_env, demo_dir, run_tag, run_idx, collect_episode=collect_episode)
+        # trial당 최대 200초 + 여유 60초
+        policy_timeout = len(trials) * 200 + 60
+        run_policy_task(policy_env, demo_dir, run_tag, run_idx,
+                        policy_timeout=policy_timeout, collect_episode=collect_episode)
 
     finally:
         # 6. 정리
